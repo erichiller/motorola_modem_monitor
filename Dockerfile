@@ -1,4 +1,4 @@
-FROM microsoft/windowsservercore:ltsc2016
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
 
 LABEL maintainer="Eric Hiller <eric@hiller.pro>"
 
@@ -37,7 +37,7 @@ RUN $url = ('https://www.python.org/ftp/python/{0}/python-{1}-amd64.exe' -f $env
 	Write-Host 'Complete.';
 
 # if this is called "PIP_VERSION", pip explodes with "ValueError: invalid truth value '<VERSION>'"
-ENV PYTHON_PIP_VERSION 19.2.1
+ENV PYTHON_PIP_VERSION 19.2.2
 
 RUN Write-Host ('Installing pip=={0} ...' -f $env:PYTHON_PIP_VERSION); \
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \

@@ -411,7 +411,7 @@ influxdb_database = os.environ['INFLUXDB_DATABASE']
 import datetime
 
 
-OUTPUT_ELASTICSEARCH = False
+OUTPUT_ELASTICSEARCH = os.environ['OUTPUT_ELASTICSEARCH'].lower() == "true" if True else False
 
 if OUTPUT_ELASTICSEARCH:
     elastic = ElasticHandler(elastic_host, elastic_index)
@@ -493,4 +493,3 @@ merged_dicts.extend(upstream_dicts)
 merged_dicts.extend(downstream_dicts)
 
 influxdb.send(merged_dicts)
-
