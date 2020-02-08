@@ -9,27 +9,36 @@ Usually run in powershell with:
 """
 
 
-try:
-    from urllib.request import Request, urlopen
-    from urllib.error import URLError, HTTPError
-except ImportError:
-    # Assume Python 2.x
-    from urllib2 import Request, urlopen
-    from urllib2 import URLError, HTTPError
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 import hmac
 import time
 import logging
+import ssl
 
 from typing import Union, Dict, List
 
 import json
 
+from pprint import pformat
 import os
 _LOGGER = logging.getLogger(__name__)
 
 
 ON = 'ON'
 OFF = 'OFF'
+
+if "DEBUG" in os.environ and os.environ['DEBUG'].lower() == "true":
+    _LOGGER.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    # create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # add formatter to ch
+    ch.setFormatter(formatter)
+    # add ch to logger
+    _LOGGER.addHandler(ch)
+    _LOGGER.debug("\nstarting...")
 
 
 
@@ -63,19 +72,23 @@ class MotorolaModem(object):
         :param password: Password to authenticate with the plug. Located on the plug.
         :param user: Username for the plug. Default is admin.
         """
+        _LOGGER.debug("MotorolaModem -> __init__()")
         self.ip = ip
-        self.url = "http://{}/HNAP1/".format(ip)
+        self.url = "https://{}:443/HNAP1/".format(ip)
         self.user = user
         self.password = password
         self.authenticated = None
         self._error_report = False
+        self.sslContext = ssl.SSLContext()  # disable SSL cert verification
         self.getStatus()
 
     def getStatus(self):
+        _LOGGER.debug("MotorolaModem -> getStatus()")
         self.status = self.Action(Action="GetMultipleHNAPs", responseElement="", params = "")
 
     def requestBody(self, Action, params):
-        """Returns the request payload for an action as json
+        _LOGGER.debug("MotorolaModem -> requestBody()")
+        """ Return the request payload for an action as json.
 
         :type Action: str
         :type params: str
@@ -87,6 +100,7 @@ class MotorolaModem(object):
 
 
     def getDownstreamChannel(self):
+        _LOGGER.debug("MotorolaModem -> getDownstreamChannel()")
         channelStatus = {}
         channels = self.status["GetMultipleHNAPsResponse"]["GetMotoStatusDownstreamChannelInfoResponse"]["MotoConnDownstreamChannel"].split("|+|")
         for channel in channels:
@@ -104,7 +118,9 @@ class MotorolaModem(object):
             }
         return channelStatus
 
-    def getUpstreamChannel(self) -> Dict[int, Dict[str, Union[float, int, str]]]:
+    def getUpstreamChannel(self
+                           ) -> Dict[int, Dict[str, Union[float, int, str]]]:
+        _LOGGER.debug("MotorolaModem -> getUpstreamChannel()")
         channelStatus = {}
         channels = self.status["GetMultipleHNAPsResponse"]["GetMotoStatusUpstreamChannelInfoResponse"]["MotoConnUpstreamChannel"].split("|+|")
         for channel in channels:
@@ -121,9 +137,11 @@ class MotorolaModem(object):
         return channelStatus
 
     def getMotoStatusConnectionInfo(self):
+        _LOGGER.debug("MotorolaModem -> getMotoStatusConnectionInfo()")
         return self.status["GetMultipleHNAPsResponse"]["GetMotoStatusConnectionInfoResponse"]
 
     def getUptime(self) -> float:
+        _LOGGER.debug("MotorolaModem -> getUptime()")
         days, hms = self.getMotoStatusConnectionInfo()["MotoConnSystemUpTime"].split(" days ")
 
         # input( f":days:{days}")
@@ -144,6 +162,7 @@ class MotorolaModem(object):
         return float(delta_seconds)
 
     def getMotoStatusStartupSequence(self):
+        _LOGGER.debug("MotorolaModem -> getMotoStatusStartupSequence()")
         return self.status["GetMultipleHNAPsResponse"]["GetMotoStatusStartupSequenceResponse"]
 
 
@@ -162,6 +181,7 @@ class MotorolaModem(object):
         :param recursive: True if first attempt failed and now attempting to re-authenticate prior
         :return: Text enclosed in responseElement brackets
         """
+        _LOGGER.debug("MotorolaModem -> Action()")
         # Authenticate client
         if self.authenticated is None:
             self.authenticated = self.auth()
@@ -176,34 +196,45 @@ class MotorolaModem(object):
         time_stamp = str(round(time.time() / 1e6))
 
         action_url = '"http://purenetworks.com/HNAP1/{}"'.format(Action)
-        AUTHKey = hmac.new(auth[0].encode(), (time_stamp + action_url).encode()).hexdigest().upper() + " " + time_stamp
+        AUTHKey = hmac.new(
+            auth[0].encode(), (time_stamp + action_url).encode(),
+            digestmod='md5').hexdigest().upper() + " " + time_stamp
 
         headers = {'Content-Type' : '"application/json; charset=utf-8"',
                    'SOAPAction': '"http://purenetworks.com/HNAP1/{}"'.format(Action),
                    'HNAP_AUTH' : '{}'.format(AUTHKey),
                    'Cookie' : 'uid={}'.format(auth[1])}
 
-
+        _LOGGER.debug("MotorolaModem -> Action() trying urlopen")
         try:
-            response = urlopen(Request(self.url, payload.encode(), headers))
+            response = urlopen(Request(self.url, payload.encode(), headers),
+                               context=self.sslContext,
+                               timeout=60)
+            _LOGGER.debug(f"MotorolaModem -> Action() received {pformat(response)}")
             # pprint(response)
-        except (HTTPError, URLError):
+        except (HTTPError, URLError) as err:
+            _LOGGER.error(
+                f"MotorolaModem -> Action() ERROR accessing URL {self.ip} :\n\t{err}"
+            )
             # Try to re-authenticate once
             self.authenticated = None
             # Recursive call to retry action
             if not recursive:
+                _LOGGER.warning(
+                    "MotorolaModem -> Action() trying again, recursive marked True"
+                )
                 return_value = self.Action(Action, responseElement, params, True)
             if recursive or return_value is None:
-                _LOGGER.warning("Failed to open url to {}".format(self.ip))
+                _LOGGER.error("Failed to open url to {}".format(self.ip))
                 self._error_report = True
                 return None
             else:
                 return return_value
 
+        _LOGGER.debug("MotorolaModem -> Action() reading response date")
         xmlData = response.read().decode()
 
-
-        # pprint(json.loads(xmlData))
+        _LOGGER.debug("MotorolaModem -> Action() returning xmlData as JSON")
         return json.loads(xmlData)
 
 
@@ -221,6 +252,7 @@ class MotorolaModem(object):
 
         See https://github.com/bikerp/dsp-w215-hnap/wiki/Authentication-process for more information.
         """
+        _LOGGER.debug("MotorolaModem -> auth()")
         payload = self.initial_auth_payload()
 
         # Build initial header
@@ -230,20 +262,37 @@ class MotorolaModem(object):
 
         # Request privatekey, cookie and challenge
         try:
-            response = urlopen(Request(self.url, payload, headers))
-        except URLError:
+            response = urlopen(Request(self.url, payload, headers),
+                               context=self.sslContext)
+        except URLError as err:
             if self._error_report is False:
-                _LOGGER.warning('Unable to open a connection to host {}'.format(self.ip))
+                _LOGGER.warning('(auth) Unable to open a connection to host {} at {}\n\tERROR: {}'.format(self.ip, self.url, err))
                 self._error_report = True
             return None
+        except HTTPError as http_err:
+            if self._error_report is False:
+                _LOGGER.warning(
+                    '(auth) Unable to open a connection to host {} at {}\n\tHTTP ERROR: {}'
+                    .format(self.ip, self.url, http_err))
+                self._error_report = True
+            return None
+        except Exception as err:
+            if self._error_report is False:
+                _LOGGER.warning(
+                    '(auth) Unable to open a connection to host {} at {}\n\tOther error occurred: {}'
+                    .format(self.ip, self.url, err))
+                self._error_report = True
+                return None
+        print('Successfully connected to host {} at {}'.format(
+                self.ip, self.url))
         json_response = json.loads(response.read().decode())["LoginResponse"]
         # Find responses
         ChallengeResponse = json_response["Challenge"]
         CookieResponse = json_response["Cookie"]
         PublickeyResponse = json_response["PublicKey"]
 
-        if (ChallengeResponse == None or CookieResponse == None or PublickeyResponse == None) and self._error_report is False:
-            _LOGGER.warning("Failed to receive initial authentication from smartplug.")
+        if (ChallengeResponse is None or CookieResponse is None or PublickeyResponse is None) and self._error_report is False:
+            _LOGGER.warning("Failed to receive initial authentication from device.")
             self._error_report = True
             return None
 
@@ -255,17 +304,24 @@ class MotorolaModem(object):
         Publickey = PublickeyResponse
 
         # Generate hash responses
-        PrivateKey = hmac.new((Publickey + self.password).encode(), (Challenge).encode()).hexdigest().upper()
-        login_pwd = hmac.new(PrivateKey.encode(), Challenge.encode()).hexdigest().upper()
+        PrivateKey = hmac.new((Publickey + self.password).encode(),
+                              (Challenge).encode(),
+                              digestmod='md5').hexdigest().upper()
+        login_pwd = hmac.new(PrivateKey.encode(),
+                             Challenge.encode(),
+                             digestmod='md5').hexdigest().upper()
 
+        _LOGGER.debug("MotorolaModem -> auth() calling auth_payload")
         response_payload = self.auth_payload(login_pwd)
+        _LOGGER.debug("MotorolaModem -> auth() returned from auth_payload")
         # Build response to initial request
         headers = {
             'Content-Type' : '"application/json; charset=utf-8"',
             'SOAPAction': '"http://purenetworks.com/HNAP1/Login"',
             'HNAP_AUTH' : '"{}"'.format(PrivateKey),
             'Cookie' : 'uid={}'.format(Cookie)}
-        response = urlopen(Request(self.url, response_payload, headers))
+        response = urlopen(Request(self.url, response_payload, headers),
+                           context=self.sslContext)
         resp = json.loads(response.read().decode())["LoginResponse"]
 
         # Find responses
@@ -277,10 +333,12 @@ class MotorolaModem(object):
             return None
 
         self._error_report = False  # Reset error logging
+        _LOGGER.debug("MotorolaModem -> auth() returing")
         return (PrivateKey, Cookie)
 
     def initial_auth_payload(self):
         """Return the initial authentication payload."""
+        _LOGGER.debug("MotorolaModem -> initial_auth_payload()")
         # return ''''''.format(self.user)
         return bytes(json.dumps(
             {"Login": {
@@ -297,6 +355,7 @@ class MotorolaModem(object):
         :type login_pwd: str
         :param login_pwd: hashed password generated by the auth function.
         """
+        _LOGGER.debug("MotorolaModem -> auth_payload()")
         return bytes(json.dumps(
             {"Login": {
                 "Action": "request",
@@ -338,12 +397,14 @@ class InfluxDBHandler:
     client: InfluxDBClient
 
     def __init__(self, host, port=8086, database="cable_modem"):
+        _LOGGER.debug("InfluxDBHandler -> __init__()")
         self.client = InfluxDBClient(host=host, port=port)
         if database not in [db["name"] for db in self.client.get_list_database()]:
             self.client.create_database(database)
         self.client.switch_database(database)
 
     def send(self, data):
+        _LOGGER.debug("InfluxDBHandler -> send()")
         self.client.write_points(data)
 
 

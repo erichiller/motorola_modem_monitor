@@ -17,6 +17,8 @@ docker run --name motorola-modem-monitor --env-file ./config/.env ehiller/motoro
 ### Run detached
 
 ```bat
+docker image build . -t ehiller/motorola-modem-monitor:latest -t ehiller/motorola-modem-monitor:ws2019sc
+docker container rm -f motorola-modem-monitor
 docker run --name motorola-modem-monitor -d --env-file ./config/.env ehiller/motorola-modem-monitor:latest
 ```
 
