@@ -549,8 +549,16 @@ merged_dicts: List[Dict] = [
         }
     }
 ]
+try:
+    merged_dicts.extend(upstream_dicts)
+    merged_dicts.extend(downstream_dicts)
 
-merged_dicts.extend(upstream_dicts)
-merged_dicts.extend(downstream_dicts)
+    influxdb.send(merged_dicts)
+    exit(0)
+except Exception as err:
+    print("Exception saving to influxdb", err)
+    exit(1)
 
-influxdb.send(merged_dicts)
+exit(1)
+
+
